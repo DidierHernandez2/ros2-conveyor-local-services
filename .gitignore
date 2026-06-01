@@ -1,0 +1,84 @@
+# =========================
+# ROS2 build files
+# =========================
+build/
+install/
+log/
+
+# Colcon
+.colcon/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# =========================
+# IDEs / Editors
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Linux
+# =========================
+*.swp
+*~
+.DS_Store
+
+# =========================
+# ROS bag files
+# =========================
+*.db3
+*.mcap
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+*.tmp
+*.log
+
+# =========================
+# Webots generated/cache
+# =========================
+*.wbproj
+.cache/
+
+# =========================
+# YOLO / AI weights
+# (quita esto si quieres subirlos)
+# =========================
+*.pt
+*.onnx
+
+# =========================
+# Camera/video
+# =========================
+*.avi
+*.mp4
+*.mov
+
+# =========================
+# Images datasets
+# =========================
+datasets/
+face_generated/
+face_input/
+
+# =========================
+# Jetson / secrets
+# =========================
+*.pem
+*.key
+.env.local
