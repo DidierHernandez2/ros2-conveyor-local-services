@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -12,75 +13,65 @@ class JoyMapperNode(Node):
     def __init__(self):
         super().__init__("joy_mapper_node")
 
-        self.declare_parameter("axis_speed", 1)
-        self.declare_parameter("btn_forward", 0)
-        self.declare_parameter("btn_stop", 1)
-        self.declare_parameter("btn_reverse", 2)
-        self.declare_parameter("btn_emergency", 3)
-        self.declare_parameter("deadzone", 0.2)
-        self.declare_parameter("min_hz", 0.0)
-        self.declare_parameter("max_hz", 60.0)
-        self.declare_parameter("step_hz", 1.0)
-        self.declare_parameter("initial_hz", 10.0)
+        self.declare_parameter("btn_deadman", 4)
+        self.declare_parameter("deadman_topic", "/safety/deadman")
+        self.declare_parameter("publish_rate_hz", 10.0)
+        self.declare_parameter("joy_timeout_sec", 0.5)
 
-        self.axis_speed = int(self.get_parameter("axis_speed").value)
-        self.btn_forward = int(self.get_parameter("btn_forward").value)
-        self.btn_stop = int(self.get_parameter("btn_stop").value)
-        self.btn_reverse = int(self.get_parameter("btn_reverse").value)
-        self.btn_emergency = int(self.get_parameter("btn_emergency").value)
+        self.btn_deadman = int(self.get_parameter("btn_deadman").value)
+        self.deadman_topic = self.get_parameter("deadman_topic").value
+        self.publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
+        self.joy_timeout_sec = float(self.get_parameter("joy_timeout_sec").value)
 
-        self.deadzone = float(self.get_parameter("deadzone").value)
-        self.min_hz = float(self.get_parameter("min_hz").value)
-        self.max_hz = float(self.get_parameter("max_hz").value)
-        self.step_hz = float(self.get_parameter("step_hz").value)
-        self.target_hz = float(self.get_parameter("initial_hz").value)
+        self.deadman_pressed = False
+        self.last_joy_time = 0.0
 
-        self.last_buttons = []
+        self.deadman_pub = self.create_publisher(
+            String,
+            self.deadman_topic,
+            10,
+        )
 
-        self.cmd_pub = self.create_publisher(String, "/conveyor/cmd", 10)
-        self.joy_sub = self.create_subscription(Joy, "/joy", self.joy_callback, 10)
+        self.joy_sub = self.create_subscription(
+            Joy,
+            "/joy",
+            self.joy_callback,
+            10,
+        )
 
-        self.get_logger().info("Joy mapper listo")
+        period = 1.0 / self.publish_rate_hz
+        self.timer = self.create_timer(period, self.publish_deadman)
 
-    def publish_cmd(self, payload: dict):
-        msg = String()
-        msg.data = json.dumps(payload)
-        self.cmd_pub.publish(msg)
-        self.get_logger().info(f"CMD: {msg.data}")
-
-    def rising_edge(self, buttons, idx: int) -> bool:
-        if idx >= len(buttons):
-            return False
-
-        old = self.last_buttons[idx] if idx < len(self.last_buttons) else 0
-        return buttons[idx] == 1 and old == 0
+        self.get_logger().info("Joy deadman listo")
+        self.get_logger().info(f"Botón deadman: {self.btn_deadman}")
+        self.get_logger().info(f"Publicando en: {self.deadman_topic}")
 
     def joy_callback(self, msg: Joy):
-        if self.rising_edge(msg.buttons, self.btn_forward):
-            self.publish_cmd({"action": "forward"})
+        self.last_joy_time = time.time()
 
-        if self.rising_edge(msg.buttons, self.btn_stop):
-            self.publish_cmd({"action": "stop"})
+        if self.btn_deadman < len(msg.buttons):
+            self.deadman_pressed = bool(msg.buttons[self.btn_deadman])
+        else:
+            self.deadman_pressed = False
 
-        if self.rising_edge(msg.buttons, self.btn_reverse):
-            self.publish_cmd({"action": "reverse"})
+    def publish_deadman(self):
+        now = time.time()
 
-        if self.rising_edge(msg.buttons, self.btn_emergency):
-            self.publish_cmd({"action": "emergency_stop"})
+        if now - self.last_joy_time > self.joy_timeout_sec:
+            pressed = False
+        else:
+            pressed = self.deadman_pressed
 
-        if self.axis_speed < len(msg.axes):
-            axis = msg.axes[self.axis_speed]
+        payload = {
+            "pressed": pressed,
+            "timestamp": now,
+            "source": "joystick",
+            "button": self.btn_deadman,
+        }
 
-            if abs(axis) > self.deadzone:
-                self.target_hz += axis * self.step_hz
-                self.target_hz = max(self.min_hz, min(self.max_hz, self.target_hz))
-
-                self.publish_cmd({
-                    "action": "set_speed",
-                    "hz": round(self.target_hz, 2),
-                })
-
-        self.last_buttons = list(msg.buttons)
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.deadman_pub.publish(msg)
 
 
 def main(args=None):

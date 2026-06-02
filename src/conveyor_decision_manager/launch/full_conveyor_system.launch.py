@@ -18,6 +18,41 @@ def generate_launch_description():
         SetEnvironmentVariable("XAUTHORITY", "/home/jetsonherbie/.Xauthority"),
 
         Node(
+            package="joy",
+            executable="joy_node",
+            name="joy_node",
+            output="screen",
+        ),
+
+        Node(
+            package="conveyor_joystick",
+            executable="joy_mapper_node",
+            name="joy_deadman_node",
+            output="screen",
+            parameters=[
+                {"btn_deadman": 2},
+                {"deadman_topic": "/safety/deadman"},
+                {"publish_rate_hz": 10.0},
+                {"joy_timeout_sec": 0.5},
+            ],
+        ),
+
+        Node(
+            package="usb_camera_publisher",
+            executable="usb_camera_node",
+            name="usb_camera_node",
+            output="screen",
+            parameters=[
+                {"camera_device": "/dev/yolo_camera"},
+                {"width": 640},
+                {"height": 480},
+                {"fps": 15.0},
+                {"publish_compressed": True},
+                {"jpeg_quality": 60},
+            ],
+        ),
+
+        Node(
             package="l510_driver",
             executable="l510_node",
             name="l510_node",
@@ -38,8 +73,13 @@ def generate_launch_description():
                 {"gui_topic": "/cmd/gui"},
                 {"dashboard_topic": "/cmd/dashboard"},
                 {"voice_topic": "/cmd/voice"},
+                {"deadman_topic": "/safety/deadman"},
+                {"auth_topic": "/auth/face_role"},
                 {"output_topic": "/conveyor/cmd"},
                 {"priority_window_sec": 2.0},
+                {"deadman_timeout_sec": 1.0},
+                {"auth_timeout_sec": 2.0},
+                {"require_deadman": True},
             ],
         ),
 
@@ -62,6 +102,7 @@ def generate_launch_description():
             parameters=[
                 {"server_url": "http://192.168.50.1:8000"},
                 {"output_cmd_topic": "/cmd/dashboard"},
+                {"auth_topic": "/auth/face_role"},
                 {"poll_period": 0.5},
                 {"send_camera": True},
             ],

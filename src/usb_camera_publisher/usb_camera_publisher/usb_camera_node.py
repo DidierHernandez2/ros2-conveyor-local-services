@@ -11,32 +11,87 @@ class UsbCameraNode(Node):
     def __init__(self):
         super().__init__("usb_camera_node")
 
-        self.declare_parameter("camera_id", 0)
+        # Puede ser:
+        # "/dev/yolo_camera"
+        # "/dev/video0"
+        # o "0"
+        self.declare_parameter("camera_device", "/dev/yolo_camera")
+
         self.declare_parameter("width", 640)
         self.declare_parameter("height", 480)
         self.declare_parameter("fps", 15.0)
         self.declare_parameter("publish_compressed", True)
         self.declare_parameter("jpeg_quality", 60)
 
-        camera_id = int(self.get_parameter("camera_id").value)
+        camera_device = str(
+            self.get_parameter("camera_device").value
+        )
+
         width = int(self.get_parameter("width").value)
         height = int(self.get_parameter("height").value)
         fps = float(self.get_parameter("fps").value)
-        self.publish_compressed = bool(self.get_parameter("publish_compressed").value)
-        self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
+
+        self.publish_compressed = bool(
+            self.get_parameter("publish_compressed").value
+        )
+
+        self.jpeg_quality = int(
+            self.get_parameter("jpeg_quality").value
+        )
 
         self.bridge = CvBridge()
 
-        self.cap = cv2.VideoCapture(camera_id, cv2.CAP_V4L2)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        # Compatibilidad:
+        # si viene "0", "1", etc -> int
+        # si viene "/dev/yolo_camera" -> string
+        try:
+            if camera_device.isdigit():
+                camera_source = int(camera_device)
+            else:
+                camera_source = camera_device
+        except Exception:
+            camera_source = camera_device
+
+        self.get_logger().info(
+            f"Intentando abrir cámara: {camera_source}"
+        )
+
+        self.cap = cv2.VideoCapture(
+            camera_source,
+            cv2.CAP_V4L2
+        )
+
+        self.cap.set(
+            cv2.CAP_PROP_FOURCC,
+            cv2.VideoWriter_fourcc(*"MJPG")
+        )
+
+        self.cap.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            width
+        )
+
+        self.cap.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            height
+        )
+
+        self.cap.set(
+            cv2.CAP_PROP_FPS,
+            fps
+        )
 
         if not self.cap.isOpened():
-            raise RuntimeError(f"No se pudo abrir la cámara con ID {camera_id}")
+            raise RuntimeError(
+                f"No se pudo abrir la cámara: {camera_source}"
+            )
 
-        self.raw_pub = self.create_publisher(Image, "/camera/image_raw", 10)
+        self.raw_pub = self.create_publisher(
+            Image,
+            "/camera/image_raw",
+            10,
+        )
+
         self.compressed_pub = self.create_publisher(
             CompressedImage,
             "/camera/image/compressed",
@@ -44,11 +99,22 @@ class UsbCameraNode(Node):
         )
 
         period = 1.0 / fps if fps > 0 else 1.0 / 15.0
-        self.timer = self.create_timer(period, self.publish_frame)
+
+        self.timer = self.create_timer(
+            period,
+            self.publish_frame,
+        )
 
         self.get_logger().info("Cámara USB iniciada")
-        self.get_logger().info("Publicando /camera/image_raw")
-        self.get_logger().info("Publicando /camera/image/compressed")
+        self.get_logger().info(
+            f"Fuente: {camera_source}"
+        )
+        self.get_logger().info(
+            "Publicando /camera/image_raw"
+        )
+        self.get_logger().info(
+            "Publicando /camera/image/compressed"
+        )
         self.get_logger().info(
             f"Config: {width}x{height} @ {fps} FPS, JPEG quality={self.jpeg_quality}"
         )
@@ -57,30 +123,44 @@ class UsbCameraNode(Node):
         ret, frame = self.cap.read()
 
         if not ret:
-            self.get_logger().warn("No se pudo leer frame de la cámara")
+            self.get_logger().warn(
+                "No se pudo leer frame de la cámara"
+            )
             return
 
         stamp = self.get_clock().now().to_msg()
 
-        raw_msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+        raw_msg = self.bridge.cv2_to_imgmsg(
+            frame,
+            encoding="bgr8"
+        )
+
         raw_msg.header.stamp = stamp
         raw_msg.header.frame_id = "usb_camera"
+
         self.raw_pub.publish(raw_msg)
 
         if self.publish_compressed:
             ok, encoded = cv2.imencode(
                 ".jpg",
                 frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+                [
+                    int(cv2.IMWRITE_JPEG_QUALITY),
+                    self.jpeg_quality,
+                ],
             )
 
             if ok:
                 compressed_msg = CompressedImage()
+
                 compressed_msg.header.stamp = stamp
                 compressed_msg.header.frame_id = "usb_camera"
                 compressed_msg.format = "jpeg"
                 compressed_msg.data = encoded.tobytes()
-                self.compressed_pub.publish(compressed_msg)
+
+                self.compressed_pub.publish(
+                    compressed_msg
+                )
 
     def destroy_node(self):
         try:
@@ -93,6 +173,7 @@ class UsbCameraNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+
     node = UsbCameraNode()
 
     try:
@@ -101,6 +182,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
+
         if rclpy.ok():
             rclpy.shutdown()
 

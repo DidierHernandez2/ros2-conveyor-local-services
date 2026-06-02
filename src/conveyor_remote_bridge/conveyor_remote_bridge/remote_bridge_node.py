@@ -18,17 +18,21 @@ class ConveyorRemoteBridge(Node):
         self.declare_parameter("poll_period", 0.5)
         self.declare_parameter("send_camera", True)
         self.declare_parameter("output_cmd_topic", "/cmd/dashboard")
+        self.declare_parameter("auth_topic", "/auth/face_role")
 
         self.server_url = self.get_parameter("server_url").value.rstrip("/")
         self.poll_period = float(self.get_parameter("poll_period").value)
         self.send_camera = bool(self.get_parameter("send_camera").value)
         self.output_cmd_topic = self.get_parameter("output_cmd_topic").value
+        self.auth_topic = self.get_parameter("auth_topic").value
 
         self.last_command_id = 0
         self.last_frame_time = 0.0
         self.frame_period = 0.07
+        self.last_face_role_json = ""
 
         self.cmd_pub = self.create_publisher(String, self.output_cmd_topic, 10)
+        self.auth_pub = self.create_publisher(String, self.auth_topic, 10)
 
         self.telemetry_sub = self.create_subscription(
             String,
@@ -44,10 +48,11 @@ class ConveyorRemoteBridge(Node):
             10,
         )
 
-        self.timer = self.create_timer(self.poll_period, self.poll_commands)
+        self.timer = self.create_timer(self.poll_period, self.poll_server)
 
         self.get_logger().info(f"Dashboard bridge conectado a {self.server_url}")
         self.get_logger().info(f"Comandos dashboard -> {self.output_cmd_topic}")
+        self.get_logger().info(f"Auth face role -> {self.auth_topic}")
 
     def normalize_cmd(self, payload):
         if not isinstance(payload, dict):
@@ -70,6 +75,10 @@ class ConveyorRemoteBridge(Node):
             cmd["hz"] = speed
 
         return cmd
+
+    def poll_server(self):
+        self.poll_commands()
+        self.poll_face_role()
 
     def poll_commands(self):
         try:
@@ -109,6 +118,47 @@ class ConveyorRemoteBridge(Node):
             self.get_logger().info(
                 f"[DASHBOARD] Publicado en {self.output_cmd_topic}: {msg.data}"
             )
+
+    def poll_face_role(self):
+        try:
+            response = requests.get(
+                f"{self.server_url}/api/face_role",
+                timeout=2.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            self.get_logger().warn(f"No se pudo leer face_role del dashboard: {e}")
+            return
+
+        face_role = data.get("latest_face_role", data)
+
+        if not isinstance(face_role, dict):
+            return
+
+        role = str(face_role.get("role", "none")).lower().strip()
+
+        payload = {
+            "role": role,
+            "name": str(face_role.get("name", "none")),
+            "confidence": float(face_role.get("confidence", 0.0) or 0.0),
+            "face_detected": bool(face_role.get("face_detected", False)),
+            "timestamp": float(face_role.get("timestamp", time.time()) or time.time()),
+            "source": "dashboard_remote",
+        }
+
+        payload_json = json.dumps(payload)
+
+        if payload_json == self.last_face_role_json:
+            return
+
+        self.last_face_role_json = payload_json
+
+        msg = String()
+        msg.data = payload_json
+        self.auth_pub.publish(msg)
+
+        self.get_logger().info(f"[AUTH] Publicado en {self.auth_topic}: {msg.data}")
 
     def telemetry_callback(self, msg: String):
         try:
