@@ -1,18 +1,14 @@
-# 🤖 ros2-conveyor-local-services
+# ros2-conveyor-local-services
 
 <div align="center">
 
-# Sistema Local ROS 2 para Banda Transportadora Inteligente
+# 🦾 ROS2 Conveyor Local Services
 
-**Control, telemetría, seguridad y operación local de una banda transportadora usando ROS 2, Jetson Orin, TECO L510, cámara, joystick, HMI, voz y servicios HTTP.**
+**Local ROS2 Humble control layer for an industrial conveyor belt system running on NVIDIA Jetson.**
 
-<br>
+Control local para banda transportadora con:
 
-![ROS2](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy-blue?style=for-the-badge&logo=ros)
-![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-orange?style=for-the-badge&logo=ubuntu)
-![Python](https://img.shields.io/badge/Python-3.x-yellow?style=for-the-badge&logo=python)
-![Jetson](https://img.shields.io/badge/NVIDIA-Jetson%20Orin-green?style=for-the-badge&logo=nvidia)
-![Modbus](https://img.shields.io/badge/Modbus-RTU%20RS485-red?style=for-the-badge)
+**TECO L510 + RS485 Modbus RTU + ROS2 Humble + HMI táctil + Dashboard remoto + Voice Bridge + Joystick Deadman Switch + Face Authorization + Cámara USB**
 
 </div>
 
@@ -20,1583 +16,1135 @@
 
 ## 📌 Descripción general
 
-`ros2-conveyor-local-services` contiene los servicios locales principales para operar una banda transportadora inteligente desde una **NVIDIA Jetson Orin** usando **ROS 2**.
+`ros2-conveyor-local-services` contiene los paquetes ROS2 que corren principalmente en la **NVIDIA Jetson** para controlar localmente una banda transportadora real mediante un variador **TECO L510** comunicado por **Modbus RTU RS485**.
+
+Este repositorio representa la **capa local de control** del sistema. Su responsabilidad es recibir comandos desde distintas interfaces, aplicar reglas de seguridad y jerarquía, y enviar únicamente comandos válidos al nodo que controla físicamente el variador L510.
 
 El sistema integra:
 
-- Control de banda transportadora mediante **variador TECO L510** por **Modbus RTU / RS485**.
-- Publicación y lectura de telemetría del variador.
-- Control desde interfaz HMI local.
-- Control por joystick.
-- Control o comandos por voz.
-- Cámara USB para visión local.
-- Capa de seguridad con **deadman switch** y **autenticación facial**.
-- Puente local/remoto mediante servicios HTTP.
-- Comunicación modular entre paquetes usando tópicos ROS 2.
-
-> En esta versión del sistema, todos los paquetes corren directamente en la **Jetson**, evitando depender de una laptop para la ejecución principal. La laptop puede usarse únicamente como cliente externo para visualizar dashboard, monitorear tópicos, hacer SSH o consumir endpoints HTTP.
-
----
-
-## 🧠 Objetivo del repositorio
-
-Este repositorio busca separar el sistema de banda transportadora en paquetes ROS 2 claros, reutilizables y mantenibles.
-
-La idea principal es que cada módulo tenga una responsabilidad específica:
-
-- Un paquete controla el L510.
-- Otro publica cámara.
-- Otro maneja joystick.
-- Otro maneja HMI.
-- Otro traduce comandos remotos HTTP a tópicos ROS.
-- Otro toma decisiones de seguridad y operación.
-- Otro permite entrada por voz.
-
-Así se evita tener un único código gigante y se facilita probar, depurar y reemplazar módulos.
+- Control real de banda transportadora con **TECO L510**.
+- Comunicación Modbus RTU vía **RS485 USB**.
+- Dashboard remoto ejecutado en una laptop externa.
+- Bridge HTTP ↔ ROS2 para conectar laptop y Jetson.
+- Interfaz gráfica local HMI táctil.
+- Asistente de voz externo mediante bridge dedicado.
+- Joystick como **Deadman Switch**.
+- Autorización por reconocimiento facial.
+- Cámara USB para transmisión al dashboard y procesamiento remoto.
+- Decision Manager centralizado para seguridad, autorización y prioridad de comandos.
 
 ---
 
-## 🧩 Arquitectura general del sistema
+## 🧠 Arquitectura general
 
-```mermaid
-flowchart TB
-    User[Operador / Usuario] --> HMI[conveyor_hmi]
-    User --> Joy[conveyor_joystick]
-    User --> Voice[voice_remote_bridge]
-    User --> RemoteClient[Cliente remoto / Laptop / Dashboard externo]
+El sistema está dividido en dos lados principales:
 
-    RemoteClient --> HTTP[conveyor_remote_bridge<br>HTTP API]
-
-    HMI --> CMD[/conveyor/cmd/]
-    Joy --> CMD
-    Voice --> CMD
-    HTTP --> CMD
-
-    Camera[usb_camera_publisher<br>Cámara USB] --> ImageTopic[/camera/image_raw/]
-    Face[conveyor_camera<br>Face Auth / Vision] --> AuthTopic[/security/face_authorized/]
-    ImageTopic --> Face
-
-    CMD --> Decision[conveyor_decision_manager<br>Deadman + Face Auth + Safety]
-    AuthTopic --> Decision
-    Deadman[/security/deadman/] --> Decision
-
-    Decision --> SafeCMD[/conveyor/safe_cmd/]
-    SafeCMD --> L510[l510_driver<br>Modbus RTU RS485]
-
-    L510 --> Telemetry[/conveyor/telemetry/]
-    Telemetry --> HMI
-    Telemetry --> HTTP
-    Telemetry --> Decision
-
-    L510 --> VFD[TECO L510]
-    VFD --> Motor[Motor banda transportadora]
+```text
+┌──────────────────────────────────────────────┐
+│                 LAPTOP EXTERNA               │
+│                                              │
+│  Dashboard remoto FastAPI/WebSocket          │
+│  Face Recognition / Face Auth                │
+│  YOLO / Digital Twin / Visualización         │
+│                                              │
+│  Endpoints HTTP:                             │
+│  /api/commands                               │
+│  /api/telemetry                              │
+│  /api/frame                                  │
+│  /api/face_role                              │
+└───────────────────────▲──────────────────────┘
+                        │ HTTP
+                        │ Ethernet / WiFi
+                        ▼
+┌──────────────────────────────────────────────┐
+│                 NVIDIA JETSON                │
+│                                              │
+│  conveyor_remote_bridge                      │
+│  voice_remote_bridge                         │
+│  conveyor_hmi                                │
+│  conveyor_joystick                           │
+│  conveyor_decision_manager                   │
+│  usb_camera_publisher                        │
+│  l510_driver                                 │
+│                                              │
+│  ROS2 Humble Topics                          │
+└───────────────────────▼──────────────────────┘
+                        │ RS485 Modbus RTU
+                        ▼
+┌──────────────────────────────────────────────┐
+│             TECO L510 + CONVEYOR             │
+└──────────────────────────────────────────────┘
 ```
 
----
-
-## 🖥️ Flujo Jetson ↔ Laptop
-
-Aunque el sistema corre directamente en la Jetson, la laptop puede conectarse para desarrollo, monitoreo o control remoto.
+### Diagrama Mermaid
 
 ```mermaid
 flowchart LR
-    subgraph Jetson["NVIDIA Jetson Orin"]
-        ROS[ROS 2 Workspace<br>ros2-conveyor-local-services]
-        Driver[l510_driver]
-        HMI[conveyor_hmi]
-        API[conveyor_remote_bridge<br>HTTP API]
-        Cam[USB Camera]
-        Safety[conveyor_decision_manager]
-        Voice[voice_remote_bridge]
-        Joy[conveyor_joystick]
+    subgraph Laptop["Laptop externa"]
+        Dash["Dashboard remoto FastAPI"]
+        Face["Face Auth Node"]
+        VoiceSrv["Voice Assistant Server"]
+        Yolo["YOLO / Vision"]
+        Sim["Conveyor Digital Twin"]
     end
 
-    subgraph Hardware["Hardware local"]
-        L510[TECO L510]
-        Motor[Banda transportadora]
-        USBRS485[USB-RS485]
-        Camera[Cámara USB]
-        Joystick[Joystick]
-        Mic[Micrófono]
+    subgraph Jetson["Jetson ROS2 Humble"]
+        RBridge["conveyor_remote_bridge"]
+        VBridge["voice_remote_bridge"]
+        HMI["conveyor_hmi"]
+        Joy["conveyor_joystick"]
+        DM["conveyor_decision_manager"]
+        Cam["usb_camera_publisher"]
+        L510["l510_driver"]
     end
 
-    subgraph Laptop["Laptop / Cliente externo"]
-        Browser[Navegador Web]
-        SSH[SSH]
-        ROSCLI[ros2 topic echo / ros2 topic pub]
-        Cloud[cloudflared opcional]
-    end
-
-    ROS --> Driver
-    Driver --> USBRS485 --> L510 --> Motor
-    Cam --> Camera
-    Joy --> Joystick
-    Voice --> Mic
-    Safety --> Driver
-
-    Laptop -->|HTTP / navegador| API
-    Laptop -->|SSH| Jetson
-    Laptop -->|ROS_DOMAIN_ID si aplica| ROS
+    Dash <-- HTTP --> RBridge
+    VoiceSrv <-- HTTP --> VBridge
+    Face --> Dash
+    Cam --> RBridge
+    RBridge --> DM
+    VBridge --> DM
+    HMI --> DM
+    Joy --> DM
+    DM --> L510
+    L510 --> RBridge
+    L510 --> HMI
+    L510 --> Dash
 ```
-
-### Flujo recomendado
-
-1. La **Jetson** inicia el workspace ROS 2.
-2. Se levantan los nodos locales.
-3. El `l510_driver` abre el puerto `/dev/l510` o `/dev/ttyUSB0`.
-4. Los comandos llegan desde HMI, joystick, voz o HTTP.
-5. `conveyor_decision_manager` valida seguridad.
-6. Si el sistema está autorizado, se publica comando seguro.
-7. `l510_driver` envía comando Modbus al L510.
-8. El L510 mueve la banda.
-9. La telemetría regresa por `/conveyor/telemetry`.
-10. HMI/API muestran estado, frecuencia, corriente y errores.
 
 ---
 
-## 📦 Paquetes del repositorio
+## 📦 Paquetes incluidos
 
 ```text
 ros2-conveyor-local-services/
-├── conveyor_camera/
-├── conveyor_decision_manager/
-├── conveyor_hmi/
-├── conveyor_joystick/
-├── conveyor_remote_bridge/
-├── l510_driver/
-├── usb_camera_publisher/
-├── voice_remote_bridge/
-├── README.md
-├── requirements_python.txt
-├── ros2_requirements.txt
-└── .gitignore
+└── src/
+    ├── conveyor_camera/
+    ├── conveyor_decision_manager/
+    ├── conveyor_hmi/
+    ├── conveyor_joystick/
+    ├── conveyor_remote_bridge/
+    ├── l510_driver/
+    ├── usb_camera_publisher/
+    └── voice_remote_bridge/
 ```
 
 ---
 
+# 📦 Descripción de paquetes
+
 ## 1. `l510_driver`
 
-Paquete encargado de controlar el variador **TECO L510** mediante **Modbus RTU sobre RS485**.
+Nodo encargado de comunicarse con el variador **TECO L510** usando **Modbus RTU RS485**.
 
-### Funciones
+### Funciones principales
 
-- Abrir puerto serial RS485.
-- Enviar comandos RUN/STOP.
-- Cambiar dirección.
-- Cambiar frecuencia.
-- Leer telemetría.
-- Publicar estado del variador.
-- Detectar errores de comunicación.
-
-### Hardware relacionado
-
-- TECO L510.
-- Adaptador USB-RS485.
-- Motor de la banda.
-- Puerto típico: `/dev/ttyUSB0`.
-- Alias recomendado: `/dev/l510`.
+- Recibe comandos ROS2 desde `/conveyor/cmd`.
+- Interpreta comandos JSON:
+  - `forward`
+  - `reverse`
+  - `stop`
+  - `emergency_stop`
+  - `set_speed`
+- Escribe registros Modbus en el variador L510.
+- Lee telemetría del variador.
+- Publica telemetría en `/conveyor/telemetry`.
 
 ### Tópicos
 
 | Tópico | Tipo | Dirección | Descripción |
 |---|---|---|---|
-| `/conveyor/cmd` | `std_msgs/String` o mensaje custom | Entrada | Comando de movimiento |
-| `/conveyor/safe_cmd` | `std_msgs/String` o mensaje custom | Entrada | Comando validado por seguridad |
-| `/conveyor/telemetry` | `std_msgs/String` o mensaje custom | Salida | Telemetría del L510 |
+| `/conveyor/cmd` | `std_msgs/String` | Sub | Comandos finales autorizados |
+| `/conveyor/telemetry` | `std_msgs/String` | Pub | Telemetría JSON del L510 |
 
-### Ejemplo de telemetría
+### Formato de comando
+
+```json
+{"action":"forward","speed_hz":10.0,"hz":10.0}
+```
+
+```json
+{"action":"reverse","speed_hz":10.0,"hz":10.0}
+```
+
+```json
+{"action":"stop"}
+```
+
+```json
+{"action":"emergency_stop"}
+```
+
+```json
+{"action":"set_speed","speed_hz":20.0,"hz":20.0}
+```
+
+### Telemetría publicada
 
 ```json
 {
   "state": 7,
   "error": 0,
-  "freq_cmd_hz": 60.0,
-  "freq_out_hz": 60.0,
+  "freq_cmd_hz": 10.0,
+  "freq_out_hz": 9.8,
   "current_raw": 5,
-  "timestamp": 1777419916.3505065
+  "timestamp": 1780000000.0
 }
 ```
 
-### Comandos de ejecución
+### Registros Modbus usados
 
-```bash
-ros2 run l510_driver l510_node
-```
+| Registro | Descripción |
+|---|---|
+| `9473` | Control word / RUN STOP direction |
+| `9474` | Frecuencia de referencia, escala 0.01 Hz |
+| `9504` | Estado del variador |
+| `9505` | Código de error |
+| `9507` | Frecuencia comandada leída |
+| `9508` | Frecuencia real de salida |
+| `9511` | Corriente de salida |
 
-Con parámetros:
+### Configuración del TECO L510
+
+Parámetros configurados en el variador:
+
+| Parámetro | Valor | Descripción |
+|---|---:|---|
+| `00-02` | `2` | Fuente RUN por comunicación |
+| `00-03` | `0` | Dirección controlada por comunicación |
+| `00-05` | `5` | Frecuencia por comunicación |
+| `00-06` | `2` | Fuente secundaria por comunicación |
+| `09-00` | `1` | Slave ID |
+| `09-01` | `0` | Comunicación |
+| `09-02` | `1` | Baudrate/config |
+| `09-03` | `0` | Comunicación |
+| `09-04` | `0` | Comunicación |
+| `09-05` | `0` | Comunicación |
+
+### Ejecutar con `ros2 run`
 
 ```bash
 ros2 run l510_driver l510_node \
   --ros-args \
-  -p port:=/dev/ttyUSB0 \
+  -p port:=/dev/l510_rs485 \
   -p slave:=1 \
   -p baudrate:=9600
-```
-
-Usando alias recomendado:
-
-```bash
-ros2 run l510_driver l510_node \
-  --ros-args \
-  -p port:=/dev/l510 \
-  -p slave:=1 \
-  -p baudrate:=9600
-```
-
-Launch sugerido:
-
-```bash
-ros2 launch l510_driver l510.launch.py
 ```
 
 ---
 
-## 2. `conveyor_hmi`
+## 2. `conveyor_decision_manager`
 
-Paquete encargado de la interfaz local de operación.
+Nodo central de decisión. Es el cerebro del sistema local.
 
-### Funciones
+Recibe comandos desde:
 
-- Mostrar botones de control:
+- GUI local.
+- Dashboard remoto.
+- Asistente de voz.
+
+Y decide si pueden llegar al L510 considerando:
+
+1. Deadman Switch activo.
+2. Autorización facial.
+3. Jerarquía de prioridad.
+4. Tipo de comando.
+
+### Jerarquía de interfaces
+
+| Fuente | Tópico | Prioridad |
+|---|---|---:|
+| GUI local | `/cmd/gui` | 3 |
+| Dashboard remoto | `/cmd/dashboard` | 2 |
+| Voz | `/cmd/voice` | 1 |
+
+### Capas de seguridad
+
+```mermaid
+flowchart TD
+    A[Comando entrante] --> B{Deadman activo?}
+    B -- No --> C[Publicar STOP]
+    B -- Sí --> D{Autorización facial}
+    D -- jefe --> E[Permitir todo]
+    D -- trabajador --> F[Permitir solo STOP]
+    D -- otro/unknown --> G[Rechazar comando]
+    D -- none --> H[Modo normal]
+    E --> I{Prioridad}
+    F --> I
+    H --> I
+    I --> J[/conveyor/cmd]
+```
+
+### Reglas de autorización facial
+
+| Rol | Acciones permitidas |
+|---|---|
+| `jefe` | Todas |
+| `trabajador` | Solo `stop` y `emergency_stop` |
+| `otro` | Ninguna |
+| `unknown` | Ninguna |
+| `none` | Modo normal |
+
+> `stop` y `emergency_stop` siempre deben permitirse por seguridad.
+
+### Tópicos
+
+| Tópico | Tipo | Dirección | Descripción |
+|---|---|---|---|
+| `/cmd/gui` | `std_msgs/String` | Sub | Comandos desde HMI local |
+| `/cmd/dashboard` | `std_msgs/String` | Sub | Comandos desde dashboard remoto |
+| `/cmd/voice` | `std_msgs/String` | Sub | Comandos desde asistente de voz |
+| `/safety/deadman` | `std_msgs/String` | Sub | Estado del deadman switch |
+| `/auth/face_role` | `std_msgs/String` | Sub | Rol detectado por face auth |
+| `/conveyor/cmd` | `std_msgs/String` | Pub | Comando final autorizado |
+
+### Formato de `/safety/deadman`
+
+```json
+{
+  "pressed": true,
+  "timestamp": 1780000000.0,
+  "source": "joystick",
+  "button": 2
+}
+```
+
+### Formato de `/auth/face_role`
+
+```json
+{
+  "role": "jefe",
+  "name": "didier",
+  "confidence": 0.9,
+  "face_detected": true,
+  "timestamp": 1780000000.0
+}
+```
+
+### Ejecutar con `ros2 run`
+
+```bash
+ros2 run conveyor_decision_manager decision_manager_node \
+  --ros-args \
+  -p gui_topic:=/cmd/gui \
+  -p dashboard_topic:=/cmd/dashboard \
+  -p voice_topic:=/cmd/voice \
+  -p deadman_topic:=/safety/deadman \
+  -p auth_topic:=/auth/face_role \
+  -p output_topic:=/conveyor/cmd \
+  -p require_deadman:=true
+```
+
+### Ejecutar sistema completo
+
+```bash
+ros2 launch conveyor_decision_manager full_conveyor_system.launch.py \
+  voice_server_ip:=192.168.50.3
+```
+
+---
+
+## 3. `conveyor_remote_bridge`
+
+Bridge entre la Jetson y el dashboard remoto que corre en la laptop.
+
+### Funciones principales
+
+- Consulta comandos del dashboard:
+  - `GET /api/commands`
+- Publica esos comandos en:
+  - `/cmd/dashboard`
+- Envía telemetría local hacia el dashboard:
+  - `POST /api/telemetry`
+- Envía cámara comprimida hacia el dashboard:
+  - `POST /api/frame`
+- Consulta autorización facial del dashboard:
+  - `GET /api/face_role`
+- Publica autorización facial en:
+  - `/auth/face_role`
+
+### Arquitectura del bridge
+
+```text
+Laptop Dashboard API
+    │
+    ├── GET  /api/commands      → /cmd/dashboard
+    ├── GET  /api/face_role     → /auth/face_role
+    ├── POST /api/telemetry     ← /conveyor/telemetry
+    └── POST /api/frame         ← /camera/image/compressed
+```
+
+### Parámetros principales
+
+| Parámetro | Default | Descripción |
+|---|---|---|
+| `server_url` | `http://localhost:8000` | URL del dashboard remoto |
+| `poll_period` | `0.5` | Periodo de consulta HTTP |
+| `send_camera` | `True` | Enviar cámara al dashboard |
+| `output_cmd_topic` | `/cmd/dashboard` | Tópico destino de comandos |
+| `auth_topic` | `/auth/face_role` | Tópico destino de autorización |
+
+### Ejecutar con `ros2 run`
+
+```bash
+ros2 run conveyor_remote_bridge remote_bridge_node \
+  --ros-args \
+  -p server_url:=http://192.168.50.1:8000 \
+  -p output_cmd_topic:=/cmd/dashboard \
+  -p auth_topic:=/auth/face_role \
+  -p poll_period:=0.5 \
+  -p send_camera:=true
+```
+
+---
+
+## 4. `voice_remote_bridge`
+
+Bridge dedicado para conectar un servidor externo de asistente de voz con ROS2 Humble en la Jetson.
+
+### Funciones principales
+
+- Consulta comandos desde el servidor de voz.
+- Publica comandos en `/cmd/voice`.
+- Mantiene aislada la lógica de voz del dashboard remoto.
+
+### Flujo
+
+```text
+Voice Assistant Server
+        │
+        │ GET /api/commands
+        ▼
+voice_remote_bridge
+        │
+        ▼
+/cmd/voice
+        │
+        ▼
+conveyor_decision_manager
+```
+
+### Ejecutar con `ros2 run`
+
+```bash
+ros2 run voice_remote_bridge voice_bridge_node \
+  --ros-args \
+  -p server_url:=http://192.168.50.3:8010 \
+  -p output_cmd_topic:=/cmd/voice \
+  -p poll_period:=0.5
+```
+
+---
+
+## 5. `conveyor_hmi`
+
+Interfaz gráfica local para pantalla táctil conectada a la Jetson.
+
+### Funciones principales
+
+- Botones:
   - Forward
   - Reverse
   - Stop
-- Mostrar slider de velocidad.
-- Mostrar telemetría:
-  - Velocidad comandada.
-  - Velocidad real.
-  - Corriente.
-  - Estado.
-  - Error.
-  - Timestamp.
-- Publicar comandos hacia la banda.
+  - Emergency Stop
+- Slider de velocidad inicial en 10 Hz.
+- Publica comandos en `/cmd/gui`.
+- Lee telemetría desde `/conveyor/telemetry`.
+- Pantalla completa automática.
+- Diseñada para display táctil local.
 
-### Tópicos
+### Flujo
 
-| Tópico | Tipo | Dirección | Descripción |
-|---|---|---|---|
-| `/conveyor/cmd` | Comando de banda | Salida | Comando generado por HMI |
-| `/conveyor/telemetry` | Telemetría | Entrada | Datos del L510 |
-
-### Ejecución
-
-```bash
-ros2 run conveyor_hmi conveyor_hmi_node
+```text
+Touch HMI
+   │
+   ▼
+/cmd/gui
+   │
+   ▼
+conveyor_decision_manager
+   │
+   ▼
+/conveyor/cmd
 ```
 
-Launch sugerido:
+### Ejecutar con `ros2 run`
 
 ```bash
-ros2 launch conveyor_hmi conveyor_hmi.launch.py
+DISPLAY=:0 XAUTHORITY=/home/jetsonherbie/.Xauthority \
+ros2 run conveyor_hmi touch_hmi_node \
+  --ros-args \
+  -p cmd_topic:=/cmd/gui \
+  -p telemetry_topic:=/conveyor/telemetry
+```
+
+Si ya exportaste variables de display:
+
+```bash
+ros2 run conveyor_hmi touch_hmi_node \
+  --ros-args \
+  -p cmd_topic:=/cmd/gui \
+  -p telemetry_topic:=/conveyor/telemetry
 ```
 
 ---
 
-## 3. `conveyor_joystick`
+## 6. `conveyor_joystick`
 
-Paquete que convierte entradas de joystick en comandos para la banda.
+Nodo para convertir el estado de un joystick en un **Deadman Switch**.
 
-### Funciones
+### Función principal
 
-- Leer mensajes de joystick.
-- Mapear botones a:
-  - Forward.
-  - Reverse.
-  - Stop.
-  - Deadman.
-- Mapear eje analógico a velocidad.
-- Publicar comandos hacia la banda.
+Mientras el botón configurado esté presionado, publica:
+
+```json
+{"pressed": true}
+```
+
+Cuando se suelta o se pierde el joystick, publica:
+
+```json
+{"pressed": false}
+```
+
+El `decision_manager` revisa este tópico constantemente. Si el deadman está inactivo, manda `stop` automático.
 
 ### Tópicos
 
 | Tópico | Tipo | Dirección | Descripción |
 |---|---|---|---|
-| `/joy` | `sensor_msgs/msg/Joy` | Entrada | Lectura cruda del joystick |
-| `/conveyor/cmd` | Comando de banda | Salida | Comando convertido |
+| `/joy` | `sensor_msgs/Joy` | Sub | Entrada del joystick |
+| `/safety/deadman` | `std_msgs/String` | Pub | Estado deadman |
 
-### Ejecución
-
-Nodo de joystick ROS:
+### Ejecutar `joy_node`
 
 ```bash
 ros2 run joy joy_node
 ```
 
-Bridge del sistema:
+### Verificar botones
 
 ```bash
-ros2 run conveyor_joystick conveyor_joystick_node
+ros2 topic echo /joy
 ```
 
-Launch sugerido:
+Si ves:
 
-```bash
-ros2 launch conveyor_joystick conveyor_joystick.launch.py
+```yaml
+buttons:
+- 0
+- 0
+- 1
 ```
 
----
+el botón presionado es índice `2`.
 
-## 4. `usb_camera_publisher`
-
-Paquete encargado de publicar video desde una cámara USB.
-
-### Funciones
-
-- Abrir cámara USB.
-- Capturar frames.
-- Publicar imágenes en ROS 2.
-- Servir como fuente para visión, HMI o autenticación facial.
-
-### Tópicos
-
-| Tópico | Tipo | Dirección | Descripción |
-|---|---|---|---|
-| `/camera/image_raw` | `sensor_msgs/msg/Image` | Salida | Imagen cruda de cámara |
-| `/camera/camera_info` | `sensor_msgs/msg/CameraInfo` | Salida opcional | Información de cámara |
-
-### Ejecución
+### Ejecutar deadman
 
 ```bash
-ros2 run usb_camera_publisher usb_camera_publisher_node
-```
-
-Con parámetros:
-
-```bash
-ros2 run usb_camera_publisher usb_camera_publisher_node \
+ros2 run conveyor_joystick joy_mapper_node \
   --ros-args \
-  -p camera_index:=0 \
-  -p frame_id:=usb_camera
+  -p btn_deadman:=2 \
+  -p deadman_topic:=/safety/deadman \
+  -p publish_rate_hz:=10.0 \
+  -p joy_timeout_sec:=0.5
 ```
 
-Launch sugerido:
+### Verificar deadman
 
 ```bash
-ros2 launch usb_camera_publisher usb_camera.launch.py
+ros2 topic echo /safety/deadman
 ```
 
 ---
 
-## 5. `conveyor_camera`
+## 7. `usb_camera_publisher`
 
-Paquete relacionado con visión local y autenticación facial.
+Nodo de cámara USB para la Jetson.
 
-### Funciones
+### Funciones principales
 
-- Suscribirse a la cámara.
-- Detectar rostros.
-- Clasificar usuarios autorizados.
-- Publicar estado de autenticación.
-- Apoyar la capa de seguridad del sistema.
+- Abre cámara mediante:
+  - `/dev/yolo_camera`
+  - `/dev/videoX`
+  - índice numérico
+- Publica imagen cruda:
+  - `/camera/image_raw`
+- Publica imagen comprimida:
+  - `/camera/image/compressed`
+- La imagen comprimida se envía al dashboard remoto por `conveyor_remote_bridge`.
 
 ### Tópicos
 
-| Tópico | Tipo | Dirección | Descripción |
-|---|---|---|---|
-| `/camera/image_raw` | `sensor_msgs/msg/Image` | Entrada | Imagen de cámara |
-| `/security/face_authorized` | `std_msgs/msg/Bool` | Salida | Indica si el usuario está autorizado |
-| `/security/face_label` | `std_msgs/msg/String` | Salida opcional | Nombre o clase detectada |
-
-### Ejecución
-
-```bash
-ros2 run conveyor_camera conveyor_camera_node
-```
-
-Para preprocesamiento o registro de usuarios, si el paquete incluye utilidades:
-
-```bash
-ros2 run conveyor_camera preprocess_faces
-```
-
-```bash
-ros2 run conveyor_camera register_faces_offline
-```
-
-Launch sugerido:
-
-```bash
-ros2 launch conveyor_camera conveyor_camera.launch.py
-```
-
----
-
-## 6. `conveyor_decision_manager`
-
-Paquete encargado de la lógica de seguridad, permisos y decisión final.
-
-### Funciones
-
-- Recibir comandos desde HMI, joystick, voz o API.
-- Verificar si hay autorización facial.
-- Verificar si el deadman está activo.
-- Bloquear comandos inseguros.
-- Enviar únicamente comandos seguros hacia el driver.
-- Aplicar STOP automático si se pierde autorización.
-
-### Arquitectura interna
-
-```mermaid
-flowchart TB
-    CMD[/conveyor/cmd/] --> Manager[conveyor_decision_manager]
-    Face[/security/face_authorized/] --> Manager
-    Deadman[/security/deadman/] --> Manager
-    Telemetry[/conveyor/telemetry/] --> Manager
-
-    Manager -->|Autorizado| SafeCMD[/conveyor/safe_cmd/]
-    Manager -->|No autorizado| StopCMD[STOP automático]
-    StopCMD --> SafeCMD
-```
-
-### Tópicos
-
-| Tópico | Tipo | Dirección | Descripción |
-|---|---|---|---|
-| `/conveyor/cmd` | Comando de banda | Entrada | Comando solicitado |
-| `/security/face_authorized` | `std_msgs/msg/Bool` | Entrada | Autenticación facial |
-| `/security/deadman` | `std_msgs/msg/Bool` | Entrada | Botón de seguridad/deadman |
-| `/conveyor/telemetry` | Telemetría | Entrada | Estado actual |
-| `/conveyor/safe_cmd` | Comando de banda | Salida | Comando validado |
-
-### Ejecución
-
-```bash
-ros2 run conveyor_decision_manager decision_manager_node
-```
-
-Launch sugerido:
-
-```bash
-ros2 launch conveyor_decision_manager decision_manager.launch.py
-```
-
----
-
-## 7. `conveyor_remote_bridge`
-
-Paquete que permite controlar y monitorear la banda desde servicios HTTP.
-
-### Funciones
-
-- Exponer endpoints HTTP.
-- Convertir peticiones HTTP a tópicos ROS 2.
-- Leer telemetría desde ROS 2.
-- Permitir integración con dashboard web, laptop o túnel público.
-- Servir como puente local entre ROS y clientes externos.
-
-### Endpoints HTTP sugeridos/documentados
-
-> Los nombres pueden adaptarse al código final del paquete, pero esta es la estructura recomendada para documentar y mantener la API.
-
-| Método | Endpoint | Descripción |
+| Tópico | Tipo | Dirección |
 |---|---|---|
-| `GET` | `/health` | Verifica que el servicio HTTP esté vivo |
-| `GET` | `/api/telemetry` | Devuelve última telemetría de la banda |
-| `POST` | `/api/conveyor/forward` | Solicita movimiento hacia adelante |
-| `POST` | `/api/conveyor/reverse` | Solicita movimiento en reversa |
-| `POST` | `/api/conveyor/stop` | Solicita paro |
-| `POST` | `/api/conveyor/speed` | Cambia velocidad/frecuencia |
-| `GET` | `/api/security/status` | Devuelve estado de seguridad |
-| `POST` | `/api/security/deadman` | Actualiza estado deadman si aplica |
+| `/camera/image_raw` | `sensor_msgs/Image` | Pub |
+| `/camera/image/compressed` | `sensor_msgs/CompressedImage` | Pub |
 
-### Ejemplos con `curl`
-
-Health check:
+### Ejecutar con alias fijo
 
 ```bash
-curl http://localhost:8000/health
+ros2 run usb_camera_publisher usb_camera_node \
+  --ros-args \
+  -p camera_device:=/dev/yolo_camera \
+  -p width:=640 \
+  -p height:=480 \
+  -p fps:=15.0 \
+  -p publish_compressed:=true \
+  -p jpeg_quality:=60
 ```
 
-Enviar forward:
+### Ejecutar con `/dev/videoX`
 
 ```bash
-curl -X POST http://localhost:8000/api/conveyor/forward
+ros2 run usb_camera_publisher usb_camera_node \
+  --ros-args \
+  -p camera_device:=/dev/video1
 ```
 
-Enviar stop:
+### Ejecutar con índice
 
 ```bash
-curl -X POST http://localhost:8000/api/conveyor/stop
-```
-
-Enviar velocidad:
-
-```bash
-curl -X POST http://localhost:8000/api/conveyor/speed \
-  -H "Content-Type: application/json" \
-  -d '{"speed_hz": 30.0}'
-```
-
-Consultar telemetría:
-
-```bash
-curl http://localhost:8000/api/telemetry
-```
-
-### Ejecución
-
-```bash
-ros2 run conveyor_remote_bridge conveyor_remote_bridge_node
-```
-
-Si usa FastAPI/Uvicorn directamente:
-
-```bash
-uvicorn conveyor_remote_bridge.api:app --host 0.0.0.0 --port 8000
-```
-
-Launch sugerido:
-
-```bash
-ros2 launch conveyor_remote_bridge conveyor_remote_bridge.launch.py
-```
-
-### Exponer dashboard/API con cloudflared
-
-```bash
-cloudflared tunnel --url http://localhost:8000
+ros2 run usb_camera_publisher usb_camera_node \
+  --ros-args \
+  -p camera_device:=0
 ```
 
 ---
 
-## 8. `voice_remote_bridge`
+## 8. `conveyor_camera`
 
-Paquete encargado de interpretar comandos de voz y convertirlos en comandos ROS 2.
+Paquete reservado para integración de cámara dentro del sistema local de conveyor.
 
-### Funciones
-
-- Leer micrófono.
-- Reconocer comandos de voz.
-- Convertir palabras clave en acciones.
-- Publicar comandos hacia la banda.
-
-### Comandos de voz sugeridos
-
-| Comando | Acción |
-|---|---|
-| "avanza" | Forward |
-| "adelante" | Forward |
-| "reversa" | Reverse |
-| "detente" | Stop |
-| "alto" | Stop |
-| "velocidad treinta" | Cambiar frecuencia |
-
-### Tópicos
-
-| Tópico | Tipo | Dirección | Descripción |
-|---|---|---|---|
-| `/voice/command` | `std_msgs/msg/String` | Salida opcional | Texto reconocido |
-| `/conveyor/cmd` | Comando de banda | Salida | Comando generado por voz |
-
-### Ejecución
-
-```bash
-ros2 run voice_remote_bridge voice_remote_bridge_node
-```
-
-Launch sugerido:
-
-```bash
-ros2 launch voice_remote_bridge voice_remote_bridge.launch.py
-```
-
----
-
-## 🔐 Security layer: Deadman + Face Auth
-
-El sistema incluye una capa de seguridad antes de permitir que un comando llegue al `l510_driver`.
-
-### Componentes
-
-| Componente | Función |
-|---|---|
-| Deadman switch | Obliga al operador a mantener una condición activa de seguridad |
-| Face Auth | Verifica si el usuario detectado está autorizado |
-| Decision Manager | Decide si el comando puede pasar |
-| STOP automático | Detiene la banda cuando no se cumplen condiciones |
-
-### Reglas de seguridad
-
-```mermaid
-flowchart TD
-    Start[Comando recibido] --> Face{¿Rostro autorizado?}
-    Face -->|No| Stop[Publicar STOP]
-    Face -->|Sí| Deadman{¿Deadman activo?}
-    Deadman -->|No| Stop
-    Deadman -->|Sí| Allow[Publicar comando seguro]
-    Stop --> SafeCMD[/conveyor/safe_cmd/]
-    Allow --> SafeCMD
-```
-
-### Comportamiento esperado
-
-- Si no hay rostro autorizado: la banda no debe correr.
-- Si se pierde autorización facial: debe mandarse STOP.
-- Si se suelta el deadman: debe mandarse STOP.
-- Si existe error del L510: debe bloquearse movimiento.
-- Si el comando viene de HTTP, voz, HMI o joystick, todos deben pasar por la misma validación.
-
----
-
-## ⚙️ TECO L510
-
-El variador TECO L510 fue configurado para recibir comandos por comunicación serial.
-
-### Parámetros configurados
-
-| Parámetro | Valor | Descripción |
-|---|---:|---|
-| `00-02` | `2` | Fuente de RUN por comunicación |
-| `00-03` | `0` | Dirección controlada por comunicación |
-| `00-05` | `5` | Fuente de frecuencia por comunicación |
-| `00-06` | `2` | Referencia secundaria por comunicación |
-| `09-00` | `1` | Slave ID Modbus |
-| `09-01` | `0` | Configuración comunicación |
-| `09-02` | `1` | Configuración comunicación |
-| `09-03` | `0` | Configuración comunicación |
-| `09-04` | `0` | Configuración comunicación |
-| `09-05` | `0` | Configuración comunicación |
-
-### Comunicación serial validada
-
-| Parámetro | Valor |
-|---|---|
-| Puerto típico | `/dev/ttyUSB0` |
-| Alias recomendado | `/dev/l510` |
-| Baudrate | `9600` |
-| Paridad | `N` |
-| Stop bits | `1` |
-| Data bits | `8` |
-| Protocolo | Modbus RTU |
-| Slave ID | `1` |
-
-### Registros Modbus validados
-
-| Registro decimal | Nombre | Descripción |
-|---:|---|---|
-| `9473` | `op_signal_cmd` | Comando/control word |
-| `9474` | `freq_cmd_wr` | Escritura de frecuencia comandada |
-| `9504` | `state_signal` | Estado del variador |
-| `9505` | `error_desc` | Código de error |
-| `9506` | `di_state` | Estado de entradas digitales |
-| `9507` | `freq_cmd_rd` | Frecuencia comandada leída |
-| `9508` | `freq_out` | Frecuencia real de salida |
-| `9511` | `current_out` | Corriente del motor |
-
-### Escala de frecuencia
-
-El L510 usa escala de centésimas de Hz:
+Dependiendo de la versión del workspace, puede usarse para publicar imágenes locales o como capa auxiliar para la cámara de la banda. En la arquitectura actual, el paquete usado para la cámara USB principal es:
 
 ```text
-6000 = 60.00 Hz
-3000 = 30.00 Hz
-1500 = 15.00 Hz
-```
-
-### Estados observados
-
-| Valor | Significado |
-|---:|---|
-| `4` | STOP |
-| `7` | RUN |
-| `0` en error | Sin error |
-| `26` en error | Estado de error/stop observado durante pruebas |
-
----
-
-## 📡 ROS Topics principales
-
-| Tópico | Tipo sugerido | Publica | Consume | Descripción |
-|---|---|---|---|---|
-| `/conveyor/cmd` | `std_msgs/String` o custom | HMI, joystick, voz, HTTP | decision_manager | Comando solicitado |
-| `/conveyor/safe_cmd` | `std_msgs/String` o custom | decision_manager | l510_driver | Comando validado |
-| `/conveyor/telemetry` | `std_msgs/String` o custom | l510_driver | HMI, API, decision_manager | Telemetría del L510 |
-| `/camera/image_raw` | `sensor_msgs/msg/Image` | usb_camera_publisher | conveyor_camera, HMI | Imagen de cámara |
-| `/camera/camera_info` | `sensor_msgs/msg/CameraInfo` | usb_camera_publisher | visión | Info de cámara |
-| `/joy` | `sensor_msgs/msg/Joy` | joy_node | conveyor_joystick | Joystick crudo |
-| `/security/face_authorized` | `std_msgs/msg/Bool` | conveyor_camera | decision_manager | Autorización facial |
-| `/security/face_label` | `std_msgs/msg/String` | conveyor_camera | HMI/API | Usuario detectado |
-| `/security/deadman` | `std_msgs/msg/Bool` | joystick/HMI/API | decision_manager | Estado deadman |
-| `/voice/command` | `std_msgs/msg/String` | voice_remote_bridge | HMI/API opcional | Texto reconocido |
-
----
-
-## 📥 Formato recomendado de comando
-
-Si se usa `std_msgs/String`, se recomienda publicar JSON.
-
-### Forward
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": true, \"direction\": 1, \"speed_hz\": 30.0}'}"
-```
-
-### Reverse
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": true, \"direction\": -1, \"speed_hz\": 30.0}'}"
-```
-
-### Stop
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": false, \"direction\": 0, \"speed_hz\": 0.0}'}"
+usb_camera_publisher
 ```
 
 ---
 
-## 📤 Formato recomendado de telemetría
+# 🌐 Endpoints HTTP usados por el dashboard remoto
+
+El dashboard remoto corre en la laptop y expone una API HTTP que consume la Jetson mediante `conveyor_remote_bridge`.
+
+## Endpoints principales
+
+| Método | Endpoint | Dirección | Descripción |
+|---|---|---|---|
+| `GET` | `/api/commands` | Laptop → Jetson | Bridge consulta comandos nuevos |
+| `POST` | `/api/telemetry` | Jetson → Laptop | Bridge envía telemetría del L510 |
+| `POST` | `/api/frame` | Jetson → Laptop | Bridge envía frame JPEG comprimido |
+| `GET` | `/api/face_role` | Laptop → Jetson | Bridge consulta rol facial |
+| `GET` | `/api/status` | Laptop | Estado general del dashboard |
+
+## `/api/commands`
+
+Respuesta esperada:
+
+```json
+{
+  "ok": true,
+  "latest_seq": 3,
+  "commands": [
+    {
+      "seq": 3,
+      "timestamp": 1780000000.0,
+      "cmd": {
+        "action": "forward",
+        "speed_hz": 10.0,
+        "hz": 10.0
+      }
+    }
+  ]
+}
+```
+
+## `/api/telemetry`
+
+Payload enviado desde Jetson:
 
 ```json
 {
   "state": 7,
   "error": 0,
-  "freq_cmd_hz": 60.0,
-  "freq_out_hz": 60.0,
+  "freq_cmd_hz": 10.0,
+  "freq_out_hz": 9.8,
   "current_raw": 5,
-  "timestamp": 1777419916.3505065
+  "timestamp": 1780000000.0
 }
 ```
 
-### Ver telemetría
+## `/api/face_role`
 
-```bash
-ros2 topic echo /conveyor/telemetry
+Respuesta esperada:
+
+```json
+{
+  "ok": true,
+  "latest_face_role": {
+    "role": "jefe",
+    "name": "didier",
+    "confidence": 0.9,
+    "face_detected": true,
+    "timestamp": 1780000000.0
+  }
+}
 ```
 
 ---
 
-## 🚀 Instalación
+# 🔌 Tópicos ROS2 principales
 
-### 1. Crear workspace
+| Tópico | Tipo | Productor | Consumidor |
+|---|---|---|---|
+| `/cmd/gui` | `std_msgs/String` | `conveyor_hmi` | `decision_manager` |
+| `/cmd/dashboard` | `std_msgs/String` | `conveyor_remote_bridge` | `decision_manager` |
+| `/cmd/voice` | `std_msgs/String` | `voice_remote_bridge` | `decision_manager` |
+| `/safety/deadman` | `std_msgs/String` | `conveyor_joystick` | `decision_manager` |
+| `/auth/face_role` | `std_msgs/String` | `conveyor_remote_bridge` | `decision_manager` |
+| `/conveyor/cmd` | `std_msgs/String` | `decision_manager` | `l510_driver` |
+| `/conveyor/telemetry` | `std_msgs/String` | `l510_driver` | HMI / bridge |
+| `/camera/image_raw` | `sensor_msgs/Image` | `usb_camera_publisher` | otros nodos |
+| `/camera/image/compressed` | `sensor_msgs/CompressedImage` | `usb_camera_publisher` | `conveyor_remote_bridge` |
+| `/joy` | `sensor_msgs/Joy` | `joy_node` | `conveyor_joystick` |
+
+---
+
+# 🛡️ Capa de seguridad
+
+## Deadman Switch
+
+El sistema requiere que el botón del joystick esté presionado para permitir acciones de movimiento.
+
+Si el deadman está inactivo:
+
+```json
+{"action":"stop"}
+```
+
+se publica automáticamente hacia `/conveyor/cmd`.
+
+## Face Authorization
+
+El reconocimiento facial corre en la laptop y el resultado llega a Jetson mediante:
+
+```text
+Laptop /auth/face_role
+→ Dashboard endpoint /api/face_role
+→ Jetson conveyor_remote_bridge
+→ /auth/face_role
+→ decision_manager
+```
+
+### Reglas
+
+| Estado facial | Acción |
+|---|---|
+| `jefe` | Permite todos los comandos |
+| `trabajador` | Solo permite detener |
+| `otro` | Bloquea comandos |
+| `unknown` | Bloquea comandos |
+| `none` | Permite modo normal |
+
+---
+
+# 🚀 Launch principal
+
+El launch principal integra los nodos locales de la Jetson.
+
+```bash
+ros2 launch conveyor_decision_manager full_conveyor_system.launch.py \
+  voice_server_ip:=192.168.50.3
+```
+
+Este launch levanta:
+
+- `joy_node`
+- `conveyor_joystick`
+- `usb_camera_publisher`
+- `l510_driver`
+- `conveyor_decision_manager`
+- `conveyor_hmi`
+- `conveyor_remote_bridge`
+- `voice_remote_bridge`
+
+---
+
+# ⚙️ Instalación
+
+## 1. Crear workspace
 
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 ```
 
-### 2. Clonar repositorio
+## 2. Clonar repositorio
 
 ```bash
 git clone https://github.com/DidierHernandez2/ros2-conveyor-local-services.git
-cd ~/ros2_ws
 ```
 
-### 3. Instalar dependencias del sistema
+## 3. Instalar dependencias ROS2
 
 ```bash
 sudo apt update
 sudo apt install -y \
-  python3-pip \
-  python3-venv \
-  python3-colcon-common-extensions \
-  python3-rosdep \
-  git \
-  v4l-utils \
-  joystick \
-  jstest-gtk \
-  minicom \
-  setserial
+  ros-humble-joy \
+  ros-humble-cv-bridge \
+  ros-humble-sensor-msgs \
+  ros-humble-std-msgs \
+  python3-pip
 ```
 
-### 4. Inicializar rosdep
+## 4. Dependencias Python
 
 ```bash
-sudo rosdep init
-rosdep update
+pip3 install pymodbus requests opencv-python
 ```
 
-Si `rosdep init` ya fue ejecutado antes, solamente usar:
-
-```bash
-rosdep update
-```
-
-### 5. Instalar dependencias ROS
-
-Desde la raíz del workspace:
+## 5. Compilar
 
 ```bash
 cd ~/ros2_ws
-rosdep install --from-paths src -y --ignore-src
-```
+source /opt/ros/humble/setup.bash
 
-### 6. Instalar dependencias Python
-
-Si el repo contiene `requirements_python.txt`:
-
-```bash
-pip3 install -r src/ros2-conveyor-local-services/requirements_python.txt
-```
-
-Dependencias comunes:
-
-```bash
-pip3 install pymodbus pyserial fastapi uvicorn opencv-python numpy websockets
-```
-
-### 7. Compilar
-
-```bash
-cd ~/ros2_ws
 colcon build --symlink-install
-```
 
-### 8. Cargar entorno
-
-```bash
 source install/setup.bash
 ```
 
-Para dejarlo permanente:
-
-```bash
-echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
-
 ---
 
-## ▶️ Ejecución rápida
+# 🔗 Alias persistentes `/dev/*`
 
-### Terminal 1: cargar ROS 2
+Para evitar que los dispositivos cambien de nombre (`ttyUSB0`, `video1`, etc.), se usan reglas `udev`.
 
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-```
+## L510 RS485
 
-### Terminal 2: driver L510
+Ejemplo para CH340:
 
 ```bash
-ros2 run l510_driver l510_node \
-  --ros-args \
-  -p port:=/dev/l510 \
-  -p slave:=1 \
-  -p baudrate:=9600
+udevadm info -a -n /dev/ttyUSB0 | grep -E "idVendor|idProduct|serial" | head -20
 ```
 
-### Terminal 3: decision manager
+Regla:
 
 ```bash
-ros2 run conveyor_decision_manager decision_manager_node
+sudo nano /etc/udev/rules.d/99-l510-rs485.rules
 ```
-
-### Terminal 4: HMI
-
-```bash
-ros2 run conveyor_hmi conveyor_hmi_node
-```
-
-### Terminal 5: cámara
-
-```bash
-ros2 run usb_camera_publisher usb_camera_publisher_node
-```
-
-### Terminal 6: joystick
-
-```bash
-ros2 run joy joy_node
-ros2 run conveyor_joystick conveyor_joystick_node
-```
-
-### Terminal 7: API remota
-
-```bash
-ros2 run conveyor_remote_bridge conveyor_remote_bridge_node
-```
-
----
-
-## 🚀 Ejecución con launch
-
-Si cada paquete cuenta con archivo launch:
-
-```bash
-ros2 launch l510_driver l510.launch.py
-ros2 launch conveyor_hmi conveyor_hmi.launch.py
-ros2 launch conveyor_joystick conveyor_joystick.launch.py
-ros2 launch usb_camera_publisher usb_camera.launch.py
-ros2 launch conveyor_camera conveyor_camera.launch.py
-ros2 launch conveyor_decision_manager decision_manager.launch.py
-ros2 launch conveyor_remote_bridge conveyor_remote_bridge.launch.py
-ros2 launch voice_remote_bridge voice_remote_bridge.launch.py
-```
-
-Launch general recomendado para el repositorio:
-
-```bash
-ros2 launch conveyor_bringup local_conveyor.launch.py
-```
-
-o, si el bringup vive dentro del mismo repo:
-
-```bash
-ros2 launch ros2_conveyor_local_services local_services.launch.py
-```
-
----
-
-## 🧪 Pruebas básicas
-
-### Ver tópicos activos
-
-```bash
-ros2 topic list
-```
-
-### Ver telemetría
-
-```bash
-ros2 topic echo /conveyor/telemetry
-```
-
-### Ver cámara
-
-```bash
-ros2 topic echo /camera/image_raw
-```
-
-O con herramientas gráficas:
-
-```bash
-ros2 run rqt_image_view rqt_image_view
-```
-
-### Ver joystick
-
-```bash
-ros2 topic echo /joy
-```
-
-### Publicar comando manual
-
-Forward a 30 Hz:
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": true, \"direction\": 1, \"speed_hz\": 30.0}'}"
-```
-
-Stop:
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": false, \"direction\": 0, \"speed_hz\": 0.0}'}"
-```
-
----
-
-## 🔌 Alias `/dev/*` recomendados
-
-Para evitar que los dispositivos cambien de nombre entre reinicios, se recomienda crear reglas `udev`.
-
-### Dispositivos sugeridos
-
-| Dispositivo | Puerto dinámico | Alias recomendado |
-|---|---|---|
-| USB-RS485 L510 | `/dev/ttyUSB0` | `/dev/l510` |
-| Cámara USB | `/dev/video0` | `/dev/conveyor_camera` |
-| Joystick | `/dev/input/js0` | `/dev/conveyor_joystick` |
-| Micrófono | ALSA device | Configurar por nombre ALSA |
-
----
-
-## Crear regla udev para L510
-
-### 1. Identificar dispositivo
-
-Conecta el USB-RS485 y ejecuta:
-
-```bash
-lsusb
-```
-
-Ejemplo observado para adaptador CH340/CH341:
 
 ```text
-1a86:7523 QinHeng Electronics CH340 serial converter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="l510_rs485", MODE="0666", GROUP="dialout"
 ```
 
-También puedes usar:
-
-```bash
-udevadm info -a -n /dev/ttyUSB0
-```
-
-### 2. Crear archivo de reglas
-
-```bash
-sudo nano /etc/udev/rules.d/99-conveyor.rules
-```
-
-Contenido sugerido:
-
-```udev
-# USB-RS485 para TECO L510
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="l510", MODE="0666", GROUP="dialout"
-
-# Cámara USB de la banda
-SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", SYMLINK+="conveyor_camera", MODE="0666"
-
-# Joystick de la banda
-KERNEL=="js[0-9]*", SUBSYSTEM=="input", SYMLINK+="conveyor_joystick", MODE="0666"
-```
-
-> Ajusta `idVendor` e `idProduct` según el resultado real de `lsusb`.
-
-### 3. Recargar reglas
+Recargar:
 
 ```bash
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-### 4. Verificar
+Verificar:
 
 ```bash
-ls -l /dev/l510
+ls -l /dev/l510_rs485
 ```
 
----
+## Cámara YOLO
 
-## 🔐 Permisos de puerto serial
+Cámara Orbbec detectada como:
 
-Agregar usuario al grupo `dialout`:
-
-```bash
-sudo usermod -aG dialout $USER
+```text
+idVendor=2bc5
+idProduct=0501
+index=0
 ```
 
-Después cerrar sesión y volver a entrar, o reiniciar:
+Regla:
 
 ```bash
-sudo reboot
+sudo nano /etc/udev/rules.d/99-yolo-camera.rules
+```
+
+```text
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="2bc5", ATTRS{idProduct}=="0501", ATTR{index}=="0", SYMLINK+="yolo_camera", MODE="0666", GROUP="video"
+```
+
+Recargar:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger
 ```
 
 Verificar:
 
 ```bash
-groups
+ls -l /dev/yolo_camera
 ```
 
 ---
 
-## 🌐 Cloudflared para acceso remoto
+# 🧪 Pruebas rápidas
 
-Para exponer temporalmente el dashboard o API:
-
-```bash
-cloudflared tunnel --url http://localhost:8000
-```
-
-Esto genera una URL pública temporal para entrar desde otra computadora o celular.
-
----
-
-## 🧰 Troubleshooting
-
-### 1. Error: `Permission denied: /dev/ttyUSB0`
-
-**Causa probable:** el usuario no pertenece al grupo `dialout`.
-
-**Solución:**
+## Probar deadman manual
 
 ```bash
-sudo usermod -aG dialout $USER
-sudo reboot
+ros2 topic pub /safety/deadman std_msgs/msg/String \
+"{data: '{\"pressed\":true}'}" -r 10
 ```
 
-También revisar permisos:
+## Probar jefe
 
 ```bash
-ls -l /dev/ttyUSB0
+ros2 topic pub /auth/face_role std_msgs/msg/String \
+"{data: '{\"role\":\"jefe\",\"name\":\"didier\",\"confidence\":0.9,\"face_detected\":true}'}" -r 2
 ```
 
----
-
-### 2. Error: `No response received after 3 retries`
-
-**Causas posibles:**
-
-- La banda está apagada.
-- El L510 no está energizado.
-- Cable RS485 mal conectado.
-- Slave ID incorrecto.
-- Baudrate incorrecto.
-- Parámetros del L510 no están en modo comunicación.
-- Otro proceso está usando el puerto.
-
-**Soluciones:**
-
-Verificar que la banda esté encendida.
-
-Revisar puerto:
+## Probar comando dashboard
 
 ```bash
-ls /dev/ttyUSB*
+ros2 topic pub --once /cmd/dashboard std_msgs/msg/String \
+"{data: '{\"action\":\"forward\",\"speed_hz\":10.0,\"hz\":10.0}'}"
 ```
 
-Revisar quién usa el puerto:
+## Ver salida final
 
 ```bash
-sudo lsof /dev/ttyUSB0
+ros2 topic echo /conveyor/cmd
 ```
 
-Cerrar proceso si es necesario:
-
-```bash
-kill -9 <PID>
-```
-
-Ejecutar con parámetros correctos:
-
-```bash
-ros2 run l510_driver l510_node \
-  --ros-args \
-  -p port:=/dev/ttyUSB0 \
-  -p slave:=1 \
-  -p baudrate:=9600
-```
-
----
-
-### 3. La telemetría aparece en `null`
-
-Ejemplo:
-
-```yaml
-data: '{"state": null, "error": null, "freq_cmd_hz": null, "freq_out_hz": null, "current_raw": null, "timestamp": 1777419916.3505065}'
-```
-
-**Causas posibles:**
-
-- El L510 no responde.
-- Registro incorrecto.
-- El driver está publicando aunque no haya lectura válida.
-- Timeout Modbus.
-- Banda apagada.
-- Puerto tomado por otro nodo.
-
-**Solución:**
-
-1. Verificar energía.
-2. Verificar puerto.
-3. Verificar `slave:=1`.
-4. Verificar parámetros del L510.
-5. Reiniciar nodo.
-6. Revisar con `lsof`.
-
----
-
-### 4. El puerto cambia de `/dev/ttyUSB0` a `/dev/ttyUSB1`
-
-**Solución:** crear alias `/dev/l510` con reglas `udev`.
-
----
-
-### 5. El joystick no publica `/joy`
-
-Verificar dispositivo:
-
-```bash
-ls /dev/input/js*
-```
-
-Probar joystick:
-
-```bash
-jstest /dev/input/js0
-```
-
-Ejecutar nodo:
-
-```bash
-ros2 run joy joy_node
-```
-
-Ver tópico:
-
-```bash
-ros2 topic echo /joy
-```
-
----
-
-### 6. La cámara no abre
-
-Verificar cámaras:
-
-```bash
-v4l2-ctl --list-devices
-```
-
-Probar cámara:
-
-```bash
-cheese
-```
-
-o:
-
-```bash
-ffplay /dev/video0
-```
-
-Ver permisos:
-
-```bash
-ls -l /dev/video0
-```
-
----
-
-### 7. El sistema no encuentra paquetes después de compilar
-
-Verifica que cargaste el entorno:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-```
-
-Ver paquetes:
-
-```bash
-ros2 pkg list | grep conveyor
-```
-
----
-
-### 8. `colcon build` falla por dependencias
-
-Ejecutar:
-
-```bash
-rosdep install --from-paths src -y --ignore-src
-```
-
-Limpiar build:
-
-```bash
-rm -rf build install log
-colcon build --symlink-install
-```
-
----
-
-### 9. El L510 no corre aunque el nodo conecta
-
-Revisar parámetros del variador:
-
-```text
-00-02 = 2
-00-03 = 0
-00-05 = 5
-00-06 = 2
-09-00 = 1
-09-01 = 0
-09-02 = 1
-09-03 = 0
-09-04 = 0
-09-05 = 0
-```
-
-Revisar que la frecuencia no esté en cero.
-
----
-
-### 10. Otro nodo tiene tomado el puerto
-
-Ver:
-
-```bash
-sudo lsof /dev/ttyUSB0
-```
-
-Ejemplo:
-
-```text
-COMMAND     PID  USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-l510_node 12701 darhf   37uW  CHR  188,0      0t0 1171 /dev/ttyUSB0
-```
-
-Matar proceso:
-
-```bash
-kill -9 12701
-```
-
----
-
-## 🧪 Comandos útiles de debugging ROS 2
-
-Listar nodos:
-
-```bash
-ros2 node list
-```
-
-Listar tópicos:
-
-```bash
-ros2 topic list
-```
-
-Ver tipo de tópico:
-
-```bash
-ros2 topic type /conveyor/telemetry
-```
-
-Ver frecuencia:
-
-```bash
-ros2 topic hz /conveyor/telemetry
-```
-
-Ver datos:
+## Ver telemetría
 
 ```bash
 ros2 topic echo /conveyor/telemetry
 ```
 
-Ver parámetros de nodo:
+## Ver cámara comprimida
 
 ```bash
-ros2 param list
-```
-
-Publicar comando:
-
-```bash
-ros2 topic pub /conveyor/cmd std_msgs/msg/String \
-"{data: '{\"run\": true, \"direction\": 1, \"speed_hz\": 20.0}'}"
+ros2 topic hz /camera/image/compressed
 ```
 
 ---
 
-## 🧱 Estructura recomendada detallada
+# 🧯 Troubleshooting
+
+## El L510 no responde
+
+Revisar:
+
+```bash
+ls -l /dev/l510_rs485
+sudo lsof /dev/l510_rs485
+```
+
+Verificar que la banda esté encendida.
+
+Ejecutar:
+
+```bash
+ros2 run l510_driver l510_node \
+  --ros-args \
+  -p port:=/dev/l510_rs485 \
+  -p slave:=1 \
+  -p baudrate:=9600
+```
+
+## Permission denied en puerto serial
+
+Agregar usuario a `dialout`:
+
+```bash
+sudo usermod -aG dialout $USER
+newgrp dialout
+```
+
+## Cámara no abre
+
+Revisar:
+
+```bash
+v4l2-ctl --list-devices
+ls -l /dev/yolo_camera
+```
+
+Probar:
+
+```bash
+python3 - << 'PY'
+import cv2
+cap = cv2.VideoCapture("/dev/yolo_camera")
+print(cap.isOpened())
+PY
+```
+
+## Joystick no aparece
+
+Verificar:
+
+```bash
+ls /dev/input/js*
+```
+
+Cargar módulos:
+
+```bash
+sudo modprobe joydev
+sudo modprobe xpad
+```
+
+Ejecutar:
+
+```bash
+ros2 run joy joy_node
+ros2 topic echo /joy
+```
+
+## GUI no abre por SSH
+
+Usar:
+
+```bash
+export DISPLAY=:0
+export XAUTHORITY=/home/jetsonherbie/.Xauthority
+```
+
+o correr desde launch principal que ya establece estas variables.
+
+## Dashboard no recibe comandos
+
+Verificar que la laptop sea accesible desde Jetson:
+
+```bash
+curl http://192.168.50.1:8000/api/status
+```
+
+Ver logs del bridge:
+
+```bash
+ros2 run conveyor_remote_bridge remote_bridge_node \
+  --ros-args \
+  -p server_url:=http://192.168.50.1:8000
+```
+
+---
+
+# 🧱 Estructura recomendada del repo
 
 ```text
 ros2-conveyor-local-services/
 ├── README.md
 ├── .gitignore
-├── requirements_python.txt
-├── ros2_requirements.txt
-│
-├── l510_driver/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── resource/
-│   ├── launch/
-│   │   └── l510.launch.py
-│   └── l510_driver/
-│       ├── __init__.py
-│       └── l510_node.py
-│
-├── conveyor_hmi/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── conveyor_hmi.launch.py
-│   └── conveyor_hmi/
-│       ├── __init__.py
-│       └── conveyor_hmi_node.py
-│
-├── conveyor_joystick/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── conveyor_joystick.launch.py
-│   └── conveyor_joystick/
-│       ├── __init__.py
-│       └── conveyor_joystick_node.py
-│
-├── usb_camera_publisher/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── usb_camera.launch.py
-│   └── usb_camera_publisher/
-│       ├── __init__.py
-│       └── usb_camera_publisher_node.py
-│
-├── conveyor_camera/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── conveyor_camera.launch.py
-│   └── conveyor_camera/
-│       ├── __init__.py
-│       └── conveyor_camera_node.py
-│
-├── conveyor_decision_manager/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── decision_manager.launch.py
-│   └── conveyor_decision_manager/
-│       ├── __init__.py
-│       └── decision_manager_node.py
-│
-├── conveyor_remote_bridge/
-│   ├── package.xml
-│   ├── setup.py
-│   ├── launch/
-│   │   └── conveyor_remote_bridge.launch.py
-│   └── conveyor_remote_bridge/
-│       ├── __init__.py
-│       ├── conveyor_remote_bridge_node.py
-│       └── api.py
-│
-└── voice_remote_bridge/
-    ├── package.xml
-    ├── setup.py
-    ├── launch/
-    │   └── voice_remote_bridge.launch.py
+└── src/
+    ├── conveyor_camera/
+    ├── conveyor_decision_manager/
+    │   ├── conveyor_decision_manager/
+    │   │   └── decision_manager_node.py
+    │   └── launch/
+    │       └── full_conveyor_system.launch.py
+    ├── conveyor_hmi/
+    ├── conveyor_joystick/
+    │   └── conveyor_joystick/
+    │       └── joy_mapper_node.py
+    ├── conveyor_remote_bridge/
+    │   └── conveyor_remote_bridge/
+    │       └── remote_bridge_node.py
+    ├── l510_driver/
+    │   └── l510_driver/
+    │       └── l510_node.py
+    ├── usb_camera_publisher/
+    │   └── usb_camera_publisher/
+    │       └── usb_camera_node.py
     └── voice_remote_bridge/
-        ├── __init__.py
-        └── voice_remote_bridge_node.py
+        └── voice_remote_bridge/
+            └── voice_bridge_node.py
 ```
 
 ---
 
-## 📄 `.gitignore` recomendado
+# 🧭 Comandos útiles
 
-```gitignore
-# ROS 2 build artifacts
-build/
-install/
-log/
+## Build completo
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-venv/
-.env/
-.venv/
-pip-wheel-metadata/
-*.egg-info/
+```bash
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
 
-# Colcon
-.colcon/
+## Launch completo
 
-# IDEs
-.vscode/
-.idea/
+```bash
+ros2 launch conveyor_decision_manager full_conveyor_system.launch.py \
+  voice_server_ip:=192.168.50.3
+```
 
-# OS
-.DS_Store
-Thumbs.db
+## Ver nodos activos
 
-# Logs
-*.log
+```bash
+ros2 node list
+```
 
-# Temporary files
-*.tmp
-*.bak
-*.swp
+## Ver tópicos
 
-# Camera / generated data
-captures/
-recordings/
-*.avi
-*.mp4
-*.bag
-*.db3
+```bash
+ros2 topic list
+```
 
-# Face recognition generated files
-face_generated/
-*.npz
-*.pkl
+## Debug de comandos
 
-# Secrets
-.env
-secrets.json
+```bash
+ros2 topic echo /cmd/gui
+ros2 topic echo /cmd/dashboard
+ros2 topic echo /cmd/voice
+ros2 topic echo /conveyor/cmd
+```
+
+## Debug de seguridad
+
+```bash
+ros2 topic echo /safety/deadman
+ros2 topic echo /auth/face_role
 ```
 
 ---
 
-## 📦 Archivos de dependencias recomendados
+# 📌 Estado final del sistema
 
-### `requirements_python.txt`
+Este repositorio implementa la capa local del sistema de banda transportadora:
 
 ```text
-fastapi
-uvicorn
-pymodbus
-pyserial
-opencv-python
-numpy
-websockets
-python-dotenv
-PyYAML
-vosk
-torch
-facenet-pytorch
+Interfaces externas/locales
+        ↓
+Bridges y HMI
+        ↓
+Decision Manager
+        ↓
+L510 Driver
+        ↓
+Banda transportadora real
 ```
 
-### `ros2_requirements.txt`
+Incluye seguridad por:
 
-```text
-rclpy
-std_msgs
-sensor_msgs
-geometry_msgs
-cv_bridge
-image_transport
-joy
-```
-
-> Nota: las dependencias ROS normalmente se instalan con `apt` o `rosdep`, no con `pip`.
+- Deadman Switch físico.
+- Autorización facial.
+- Prioridad de interfaz.
+- Stop automático.
+- Separación entre comandos remotos y ejecución física.
 
 ---
 
-## ✅ Checklist antes de correr
+# 👥 Equipo
 
-- [ ] La Jetson está encendida.
-- [ ] ROS 2 está instalado.
-- [ ] El workspace compila con `colcon build`.
-- [ ] El entorno está cargado con `source install/setup.bash`.
-- [ ] El L510 está energizado.
-- [ ] El USB-RS485 está conectado.
-- [ ] El usuario pertenece a `dialout`.
-- [ ] El puerto `/dev/l510` existe o `/dev/ttyUSB0` está disponible.
-- [ ] La cámara aparece como `/dev/video0`.
-- [ ] El joystick aparece como `/dev/input/js0`.
-- [ ] El tópico `/conveyor/telemetry` publica datos válidos.
-- [ ] El sistema de seguridad permite movimiento solo con autorización.
+Proyecto desarrollado como parte del sistema de robótica y sistemas inteligentes del equipo **Fantastic Four**.
 
 ---
 
-## 🧑‍💻 Autor / Equipo
+# 📄 Licencia
 
-Proyecto desarrollado para el sistema de banda transportadora inteligente del equipo **Fantastic Four**.
-
-Repositorio:
-
-```text
-ros2-conveyor-local-services
-```
-
----
-
-## 📌 Notas finales
-
-Este repositorio representa la capa local del sistema. Su función es operar directamente el hardware desde la Jetson y exponer interfaces ROS 2/HTTP para control, telemetría y seguridad.
-
-La filosofía del sistema es:
-
-```text
-Entradas múltiples → Validación de seguridad → Comando seguro → L510 → Telemetría → HMI/API
-```
-
-De esta forma, no importa si el comando viene desde joystick, voz, dashboard, laptop o HMI: todos pasan por la misma capa de seguridad antes de mover la banda.
+Pendiente de definir.
